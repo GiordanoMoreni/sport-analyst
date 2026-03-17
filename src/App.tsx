@@ -7,10 +7,11 @@ import { VideoControls } from './components/VideoControls';
 import { AnnotationPanel } from './components/AnnotationPanel';
 import { Timeline } from './components/Timeline';
 import { ExportPanel } from './components/ExportPanel';
+import { AIEventsPanel } from './components/AIEventsPanel';
 import { useVideoPlayer } from './hooks/useVideoPlayer';
 import { useFabricCanvas } from './hooks/useFabricCanvas';
 import { useMediapipeTracking, AIMode } from './hooks/useMediapipeTracking';
-import { ToolType, Annotation, AnnotationSession } from './types';
+import { ToolType, Annotation, AnnotationSession, AIEvent } from './types';
 import {
   createSession, saveSession, loadCurrentSession, clearCurrentSession,
   addAnnotationToSession, removeAnnotationFromSession, updateAnnotationInSession
@@ -42,12 +43,19 @@ export default function App() {
     hands: true,
     face: true,
   });
+  const [aiEvents, setAiEvents] = useState<AIEvent[]>([]);
 
   const { ready: aiReady, error: aiError } = useMediapipeTracking({
     enabled: aiEnabled,
     modes: aiModes,
     videoRef: video.videoRef,
     canvasRef: aiCanvasRef,
+    onEvent: (event) => {
+      setAiEvents(prev => {
+        const next = [...prev, event];
+        return next.length > 300 ? next.slice(next.length - 300) : next;
+      });
+    },
   });
 
   const {
@@ -135,6 +143,7 @@ export default function App() {
     clearCurrentSession();
     clearCanvas();
     setSession(null);
+    setAiEvents([]);
   }, [video.videoSrc, clearCanvas]);
 
   // Create session when video is loaded
@@ -306,6 +315,12 @@ export default function App() {
             onUpdateDuration={handleUpdateDuration}
             onDefaultDurationChange={setAnnotationDuration}
             onAddCurrentAsKeyFrame={handleAddKeyFrame}
+          />
+          <AIEventsPanel
+            events={aiEvents}
+            currentTime={video.currentTime}
+            onJumpTo={handleJumpTo}
+            onClear={() => setAiEvents([])}
           />
           <ExportPanel
             session={session}

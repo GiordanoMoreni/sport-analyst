@@ -210,6 +210,11 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   cursor: pointer; transition: background 0.1s;
 }
 .ann-time:hover { background: rgba(61, 127, 255, 0.2); }
+.ai-confidence {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+}
 .ann-duration {
   display: inline-flex;
   align-items: center;

@@ -57,3 +57,11 @@ export interface AppState {
   videoName: string;
   showAnnotations: boolean;
 }
+
+export interface AIEvent {
+  id: string;
+  type: 'probable_touch' | 'attack';
+  timestamp: number;
+  confidence: number;
+  meta?: Record<string, unknown>;
+}
