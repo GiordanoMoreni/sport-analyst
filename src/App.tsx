@@ -81,6 +81,12 @@ export default function App() {
     }
   }, [aiEnabled, aiFlags.priority]);
 
+  useEffect(() => {
+    if (!aiEnabled || !aiModes.pose) {
+      setAiFencers([]);
+    }
+  }, [aiEnabled, aiModes.pose]);
+
   const {
     clearCanvas,
     deleteSelected,

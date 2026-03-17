@@ -86,6 +86,7 @@ export function useMediapipeTracking({
   });
   const lastAnyAttackRef = useRef(0);
   const lastPriorityEmitRef = useRef(0);
+  const lastPriorityActiveRef = useRef(0);
   const lastCentersRef = useRef<Record<number, { x: number; y: number }>>({});
 
   const nextEventId = () => {
@@ -355,10 +356,11 @@ export function useMediapipeTracking({
                       pr.holder === stableAttacker ||
                       ema > pr.confidence + 0.1 ||
                       (pr.since !== null && now - pr.since > 1200);
-                    if (shouldSwitch) {
-                      priorityRef.current = { holder: stableAttacker, confidence: ema, since: now };
-                      onPriorityChange?.(priorityRef.current);
-                    }
+                  if (shouldSwitch) {
+                    priorityRef.current = { holder: stableAttacker, confidence: ema, since: now };
+                    lastPriorityActiveRef.current = now;
+                    onPriorityChange?.(priorityRef.current);
+                  }
                   }
                 }
               }
@@ -407,6 +409,7 @@ export function useMediapipeTracking({
                     confidence: Math.min(1, (top.speedToward - FORWARD_MIN) / 0.3),
                     since: nowMs,
                   };
+                  lastPriorityActiveRef.current = nowMs;
                   onPriorityChange?.(priorityRef.current);
                 }
               }
@@ -455,6 +458,8 @@ export function useMediapipeTracking({
             }
             onFencerPositions(visible);
           }
+        } else {
+          if (onFencerPositions) onFencerPositions([]);
         }
       }
       if (modes.hands && handsRef.current) {
@@ -511,7 +516,7 @@ export function useMediapipeTracking({
         }
       });
 
-      if (flags.priority && priorityRef.current.holder !== null && now - lastAnyAttackRef.current > 2000) {
+      if (flags.priority && priorityRef.current.holder !== null && now - lastPriorityActiveRef.current > 2000) {
         priorityRef.current = { holder: null, confidence: 0, since: null };
         onPriorityChange?.(priorityRef.current);
       }
