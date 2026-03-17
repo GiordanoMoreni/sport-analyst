@@ -10,8 +10,8 @@ import { ExportPanel } from './components/ExportPanel';
 import { AIEventsPanel } from './components/AIEventsPanel';
 import { useVideoPlayer } from './hooks/useVideoPlayer';
 import { useFabricCanvas } from './hooks/useFabricCanvas';
-import { useMediapipeTracking, AIMode, AIEventFlags } from './hooks/useMediapipeTracking';
-import { ToolType, Annotation, AnnotationSession, AIEvent } from './types';
+import { useMediapipeTracking, AIMode, AIEventFlags, AICalibration } from './hooks/useMediapipeTracking';
+import { ToolType, Annotation, AnnotationSession, AIEvent, AICoachingTip } from './types';
 import {
   createSession, saveSession, loadCurrentSession, clearCurrentSession,
   addAnnotationToSession, removeAnnotationFromSession, updateAnnotationInSession
@@ -47,8 +47,19 @@ export default function App() {
     attack: true,
     touch: true,
     priority: true,
+    measure: true,
+    tactics: true,
   });
+  const [aiCalibration, setAiCalibration] = useState<AICalibration>({
+    touchDistScale: 1,
+    touchSpeedScale: 1,
+    attackSpeedScale: 1,
+    measureDistScale: 1,
+    priorityForwardScale: 1,
+  });
+  const [aiCoachingEnabled, setAiCoachingEnabled] = useState(true);
   const [aiEvents, setAiEvents] = useState<AIEvent[]>([]);
+  const [aiCoachingTips, setAiCoachingTips] = useState<AICoachingTip[]>([]);
   const [aiPriority, setAiPriority] = useState<{ holder: number | null; confidence: number }>({
     holder: null,
     confidence: 0,
@@ -58,12 +69,14 @@ export default function App() {
     reactionTimes: { attacker: number; defender: number; ms: number; ts: number }[];
     stance: { id: number; forward: 'L' | 'R' | null; speed: number }[];
     aggressiveness: { id: number; score: number }[];
+    distance?: { value: number; avg: number; inMeasure: boolean; threshold: number };
   }>({ reactionTimes: [], stance: [], aggressiveness: [] });
 
   const { ready: aiReady, error: aiError } = useMediapipeTracking({
     enabled: aiEnabled,
     modes: aiModes,
     flags: aiFlags,
+    calibration: aiCalibration,
     videoRef: video.videoRef,
     canvasRef: aiCanvasRef,
     onEvent: (event) => {
@@ -181,6 +194,14 @@ export default function App() {
     clearCanvas();
     setSession(null);
     setAiEvents([]);
+    setAiCoachingTips([]);
+    setAiCalibration({
+      touchDistScale: 1,
+      touchSpeedScale: 1,
+      attackSpeedScale: 1,
+      measureDistScale: 1,
+      priorityForwardScale: 1,
+    });
   }, [video.videoSrc, clearCanvas]);
 
   // Create session when video is loaded
@@ -280,6 +301,101 @@ export default function App() {
     video.pause();
   }, [video]);
 
+  const tipCooldownRef = useRef<Record<string, number>>({});
+  const pushTip = useCallback((tip: Omit<AICoachingTip, 'id'>) => {
+    if (!aiCoachingEnabled) return;
+    const now = Date.now();
+    const key = `${tip.type}`;
+    const last = tipCooldownRef.current[key] || 0;
+    if (now - last < 3000) return;
+    tipCooldownRef.current[key] = now;
+    setAiCoachingTips(prev => {
+      const next = [...prev, { ...tip, id: `tip_${now}_${prev.length}` }];
+      return next.length > 120 ? next.slice(next.length - 120) : next;
+    });
+  }, [aiCoachingEnabled]);
+
+  useEffect(() => {
+    if (!aiCoachingEnabled) return;
+    const latestReaction = aiMetrics.reactionTimes[aiMetrics.reactionTimes.length - 1];
+    if (latestReaction && latestReaction.ms > 450) {
+      pushTip({
+        type: 'timing',
+        timestamp: latestReaction.ts,
+        confidence: Math.min(1, latestReaction.ms / 900),
+        message: `Reazione lenta F${latestReaction.defender + 1}: cura il timing e lâ€™uscita sul tempo.`,
+        meta: latestReaction,
+      });
+    }
+
+    const distance = aiMetrics.distance;
+    if (distance && aiFlags.measure) {
+      if (distance.inMeasure && distance.value < distance.threshold * 0.88) {
+        pushTip({
+          type: 'spacing',
+          timestamp: video.currentTime,
+          confidence: 0.7,
+          message: 'Spazio troppo corto: entra in misura con piÃ¹ preparazione.',
+          meta: distance,
+        });
+      } else if (distance.value > distance.threshold * 1.35) {
+        pushTip({
+          type: 'spacing',
+          timestamp: video.currentTime,
+          confidence: 0.65,
+          message: 'Distanza lunga: serve avanzare per prendere la misura.',
+          meta: distance,
+        });
+      }
+    }
+
+    const lowAgg = aiMetrics.aggressiveness.find(a => a.score < 0.18);
+    if (lowAgg) {
+      pushTip({
+        type: 'tactics',
+        timestamp: video.currentTime,
+        confidence: 0.6,
+        message: `Bassa iniziativa F${lowAgg.id + 1}: prova ad alzare il ritmo con preparazioni corte.`,
+        meta: lowAgg,
+      });
+    }
+  }, [aiMetrics, aiCoachingEnabled, aiFlags.measure, pushTip, video.currentTime]);
+
+  const applyCalibrationFeedback = useCallback((type: AIEvent['type'], action: 'confirm' | 'reject') => {
+    const clamp = (v: number) => Math.min(1.4, Math.max(0.7, v));
+    setAiCalibration(prev => {
+      let next = { ...prev };
+      if (type === 'probable_touch') {
+        next.touchDistScale = clamp(prev.touchDistScale * (action === 'confirm' ? 1.04 : 0.96));
+        next.touchSpeedScale = clamp(prev.touchSpeedScale * (action === 'confirm' ? 0.98 : 1.04));
+      } else if (type === 'attack') {
+        next.attackSpeedScale = clamp(prev.attackSpeedScale * (action === 'confirm' ? 0.96 : 1.05));
+      } else if (type === 'in_measure') {
+        next.measureDistScale = clamp(prev.measureDistScale * (action === 'confirm' ? 1.03 : 0.97));
+      }
+      return next;
+    });
+  }, []);
+
+  const handleEventFeedback = useCallback((id: string, action: 'confirm' | 'reject') => {
+    setAiEvents(prev => {
+      const event = prev.find(e => e.id === id);
+      if (event) applyCalibrationFeedback(event.type, action);
+      return prev.map(e => (e.id === id ? { ...e, status: action === 'confirm' ? 'confirmed' : 'rejected' } : e));
+    });
+  }, [applyCalibrationFeedback]);
+
+  const handleEventTypeChange = useCallback((id: string, newType: AIEvent['type']) => {
+    setAiEvents(prev => {
+      const event = prev.find(e => e.id === id);
+      if (event && event.type !== newType) {
+        applyCalibrationFeedback(event.type, 'reject');
+        applyCalibrationFeedback(newType, 'confirm');
+      }
+      return prev.map(e => (e.id === id ? { ...e, type: newType, status: 'confirmed' } : e));
+    });
+  }, [applyCalibrationFeedback]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -355,9 +471,13 @@ export default function App() {
           />
           <AIEventsPanel
             events={aiEvents}
+            tips={aiCoachingTips}
             currentTime={video.currentTime}
             onJumpTo={handleJumpTo}
             onClear={() => setAiEvents([])}
+            onFeedback={handleEventFeedback}
+            onTypeChange={handleEventTypeChange}
+            onTipClear={() => setAiCoachingTips([])}
             metrics={aiMetrics}
           />
           <ExportPanel
@@ -419,35 +539,62 @@ export default function App() {
                 Face
               </label>
             </div>
-            <div className={`ai-flags ${aiEnabled ? '' : 'disabled'}`}>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={aiFlags.attack}
-                  onChange={e => setAiFlags(f => ({ ...f, attack: e.target.checked }))}
-                  disabled={!aiEnabled}
-                />
-                Attacco
-              </label>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={aiFlags.touch}
-                  onChange={e => setAiFlags(f => ({ ...f, touch: e.target.checked }))}
-                  disabled={!aiEnabled}
-                />
-                Tocco
-              </label>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={aiFlags.priority}
-                  onChange={e => setAiFlags(f => ({ ...f, priority: e.target.checked }))}
-                  disabled={!aiEnabled}
-                />
-                Priorita
-              </label>
-            </div>
+          <div className={`ai-flags ${aiEnabled ? '' : 'disabled'}`}>
+            <label>
+              <input
+                type="checkbox"
+                checked={aiFlags.attack}
+                onChange={e => setAiFlags(f => ({ ...f, attack: e.target.checked }))}
+                disabled={!aiEnabled}
+              />
+              Attacco
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={aiFlags.touch}
+                onChange={e => setAiFlags(f => ({ ...f, touch: e.target.checked }))}
+                disabled={!aiEnabled}
+              />
+              Tocco
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={aiFlags.priority}
+                onChange={e => setAiFlags(f => ({ ...f, priority: e.target.checked }))}
+                disabled={!aiEnabled}
+              />
+              Priorita
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={aiFlags.measure}
+                onChange={e => setAiFlags(f => ({ ...f, measure: e.target.checked }))}
+                disabled={!aiEnabled}
+              />
+              Misura
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={aiFlags.tactics}
+                onChange={e => setAiFlags(f => ({ ...f, tactics: e.target.checked }))}
+                disabled={!aiEnabled}
+              />
+              Tattico
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={aiCoachingEnabled}
+                onChange={e => setAiCoachingEnabled(e.target.checked)}
+                disabled={!aiEnabled}
+              />
+              Coaching
+            </label>
+          </div>
             <div className="ai-status">
               {aiEnabled && !aiReady && !aiError && 'Caricamento modelli...'}
               {aiEnabled && aiError && 'Errore AI'}
@@ -468,12 +615,17 @@ export default function App() {
               playsInline
               preload="metadata"
             />
-            {aiFlags.priority && aiPriority.holder !== null && (
-              <div className={`priority-badge f${aiPriority.holder + 1}`}>
-                Priorita: F{aiPriority.holder + 1}
-              </div>
-            )}
-            {aiEnabled && aiModes.pose && aiFencers.length >= 2 && aiFencers.map(f => (
+          {aiFlags.priority && aiPriority.holder !== null && (
+            <div className={`priority-badge f${aiPriority.holder + 1}`}>
+              Priorita: F{aiPriority.holder + 1}
+            </div>
+          )}
+          {aiEnabled && aiFlags.measure && aiMetrics.distance && (
+            <div className={`distance-badge ${aiMetrics.distance.inMeasure ? 'in' : ''}`}>
+              Misura: {aiMetrics.distance.value.toFixed(2)}
+            </div>
+          )}
+          {aiEnabled && aiModes.pose && aiFencers.length >= 2 && aiFencers.map(f => (
               <div
                 key={`fencer-${f.id}`}
                 className={`fencer-tag f${f.id + 1} ${aiPriority.holder === f.id ? 'priority' : ''}`}
@@ -511,6 +663,8 @@ export default function App() {
             duration={video.duration}
             currentTime={video.currentTime}
             annotations={session?.annotations || []}
+            aiEvents={aiEvents}
+            coachingTips={aiCoachingTips}
             onSeek={video.seek}
           />
 

@@ -60,8 +60,18 @@ export interface AppState {
 
 export interface AIEvent {
   id: string;
-  type: 'probable_touch' | 'attack';
+  type: 'probable_touch' | 'attack' | 'in_measure';
   timestamp: number;
+  confidence: number;
+  meta?: Record<string, unknown>;
+  status?: 'confirmed' | 'rejected';
+}
+
+export interface AICoachingTip {
+  id: string;
+  type: 'timing' | 'spacing' | 'priority' | 'tactics';
+  timestamp: number;
+  message: string;
   confidence: number;
   meta?: Record<string, unknown>;
 }

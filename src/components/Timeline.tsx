@@ -1,12 +1,14 @@
 // src/components/Timeline.tsx
 
 import React, { useRef, useCallback } from 'react';
-import { Annotation } from '../types';
+import { Annotation, AIEvent, AICoachingTip } from '../types';
 
 interface TimelineProps {
   duration: number;
   currentTime: number;
   annotations: Annotation[];
+  aiEvents?: AIEvent[];
+  coachingTips?: AICoachingTip[];
   onSeek: (t: number) => void;
 }
 
@@ -14,6 +16,8 @@ export const Timeline: React.FC<TimelineProps> = ({
   duration,
   currentTime,
   annotations,
+  aiEvents = [],
+  coachingTips = [],
   onSeek,
 }) => {
   const trackRef = useRef<HTMLDivElement>(null);
@@ -33,6 +37,15 @@ export const Timeline: React.FC<TimelineProps> = ({
     pct: (a.timestamp / duration) * 100,
     color: a.color,
   }));
+  const aiTicks = aiEvents.map(e => ({
+    id: e.id,
+    pct: (e.timestamp / duration) * 100,
+    type: e.type,
+  }));
+  const tipTicks = coachingTips.map(t => ({
+    id: t.id,
+    pct: (t.timestamp / duration) * 100,
+  }));
 
   return (
     <div className="timeline-container" ref={trackRef} onClick={handleClick}>
@@ -46,6 +59,22 @@ export const Timeline: React.FC<TimelineProps> = ({
           className="timeline-tick"
           style={{ left: `${tick.pct}%`, background: tick.color }}
           title={`Annotazione a ${Math.floor(tick.pct)}%`}
+        />
+      ))}
+      {aiTicks.map(tick => (
+        <div
+          key={tick.id}
+          className={`timeline-tick ai ${tick.type}`}
+          style={{ left: `${tick.pct}%` }}
+          title={`AI: ${tick.type}`}
+        />
+      ))}
+      {tipTicks.map(tick => (
+        <div
+          key={tick.id}
+          className="timeline-tick coaching"
+          style={{ left: `${tick.pct}%` }}
+          title="Coaching tip"
         />
       ))}
 

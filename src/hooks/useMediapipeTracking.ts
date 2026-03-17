@@ -19,17 +19,28 @@ export type AIEventFlags = {
   attack: boolean;
   touch: boolean;
   priority: boolean;
+  measure: boolean;
+  tactics: boolean;
+};
+
+export type AICalibration = {
+  touchDistScale: number;
+  touchSpeedScale: number;
+  attackSpeedScale: number;
+  measureDistScale: number;
+  priorityForwardScale: number;
 };
 
 interface UseMediapipeTrackingOptions {
   enabled: boolean;
   modes: AIMode;
   flags: AIEventFlags;
+  calibration?: AICalibration;
   videoRef: React.RefObject<HTMLVideoElement>;
   canvasRef: React.RefObject<HTMLCanvasElement>;
   onEvent?: (event: {
     id: string;
-    type: 'probable_touch' | 'attack';
+    type: 'probable_touch' | 'attack' | 'in_measure';
     timestamp: number;
     confidence: number;
     meta?: Record<string, unknown>;
@@ -44,6 +55,7 @@ interface UseMediapipeTrackingOptions {
     reactionTimes: { attacker: number; defender: number; ms: number; ts: number }[];
     stance: { id: number; forward: 'L' | 'R' | null; speed: number }[];
     aggressiveness: { id: number; score: number }[];
+    distance?: { value: number; avg: number; inMeasure: boolean; threshold: number };
   }) => void;
 }
 
@@ -51,11 +63,18 @@ const WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wa
 const POSE_MODEL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
 const HAND_MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 const FACE_MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+const BASE_TOUCH_DIST = 0.08;
+const BASE_ATTACK_SPEED = 0.65;
+const BASE_TOUCH_SPEED = 0.12;
+const BASE_MEASURE = 0.28;
+const BASE_PRIORITY_FORWARD = 0.18;
+const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
 export function useMediapipeTracking({
   enabled,
   modes,
   flags,
+  calibration,
   videoRef,
   canvasRef,
   onEvent,
@@ -82,6 +101,7 @@ export function useMediapipeTracking({
     elbows: { x: number; y: number }[][];
     centers: ({ x: number; y: number } | null)[];
   } | null>(null);
+  const lastPosePrevRef = useRef<typeof lastPoseRef.current>(null);
   const lastAttackEmitRef = useRef<Record<number, number>>({});
   const attackEmaRef = useRef<Record<number, number>>({});
   const touchEmaRef = useRef<Record<number, number>>({});
@@ -93,13 +113,26 @@ export function useMediapipeTracking({
   const lastAnyAttackRef = useRef(0);
   const lastPriorityEmitRef = useRef(0);
   const lastPriorityActiveRef = useRef(0);
-  const lastCentersRef = useRef<Record<number, { x: number; y: number }>>({});
+  const prevCentersRef = useRef<Record<number, { x: number; y: number }>>({});
   const fencerSmoothRef = useRef<Record<number, { x: number; y: number }>>({});
   const lastAttackStartRef = useRef<Record<number, { ts: number; opponent: number }>>({});
   const reactionQueueRef = useRef<{ attacker: number; defender: number; ts: number }[]>([]);
   const reactionTimesRef = useRef<{ attacker: number; defender: number; ms: number; ts: number }[]>([]);
   const stanceRef = useRef<Record<number, { forward: 'L' | 'R' | null; speed: number }>>({});
   const aggressivenessRef = useRef<Record<number, { count: number; last: number; score: number }>>({});
+  const distanceAvgRef = useRef<number | null>(null);
+  const distanceLastRef = useRef<number | null>(null);
+  const inMeasureRef = useRef(false);
+  const lastMeasureEmitRef = useRef(0);
+  const currentCentersRef = useRef<Record<number, { x: number; y: number }> | null>(null);
+
+  const safeCalibration: AICalibration = {
+    touchDistScale: calibration?.touchDistScale ?? 1,
+    touchSpeedScale: calibration?.touchSpeedScale ?? 1,
+    attackSpeedScale: calibration?.attackSpeedScale ?? 1,
+    measureDistScale: calibration?.measureDistScale ?? 1,
+    priorityForwardScale: calibration?.priorityForwardScale ?? 1,
+  };
 
   const nextEventId = () => {
     eventSeqRef.current += 1;
@@ -166,6 +199,7 @@ export function useMediapipeTracking({
       lastTsRef.current = ts;
 
       if (video.readyState < 2) return;
+      if (video.paused || video.ended) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       const now = performance.now();
@@ -189,13 +223,16 @@ export function useMediapipeTracking({
           const R_SHOULDER = 12;
           const L_HIP = 23;
           const R_HIP = 24;
-          const THRESHOLD = 0.08;
-          const ATTACK_SPEED = 0.65;
           const ATTACK_COOLDOWN = 900;
-          const TOUCH_SPEED = 0.12;
           const TIP_EXTEND = 0.22;
           type BestHit = { dist: number; x: number; y: number; attacker: number; defender: number };
           let best: BestHit | null = null;
+
+          const touchDist = BASE_TOUCH_DIST * clamp(safeCalibration.touchDistScale, 0.6, 1.6);
+          const touchSpeed = BASE_TOUCH_SPEED * clamp(safeCalibration.touchSpeedScale, 0.6, 1.6);
+          const attackSpeed = BASE_ATTACK_SPEED * clamp(safeCalibration.attackSpeedScale, 0.6, 1.6);
+          const measureDist = BASE_MEASURE * clamp(safeCalibration.measureDistScale, 0.6, 1.6);
+          const priorityForwardScale = clamp(safeCalibration.priorityForwardScale, 0.6, 1.6);
 
           const torsoCenter = (lm: typeof res.landmarks[0]) => {
             const pts = [lm[L_SHOULDER], lm[R_SHOULDER], lm[L_HIP], lm[R_HIP]].filter(Boolean);
@@ -264,6 +301,34 @@ export function useMediapipeTracking({
             }
           }
 
+          // Distance / measure detection
+          if (centers.length >= 2) {
+            const sorted = [...centers].sort((a, b) => a.x - b.x);
+            const dx = sorted[1].x - sorted[0].x;
+            const dy = sorted[1].y - sorted[0].y;
+            const dist = Math.hypot(dx, dy);
+            distanceLastRef.current = dist;
+            const prevAvg = distanceAvgRef.current ?? dist;
+            const avg = prevAvg * 0.85 + dist * 0.15;
+            distanceAvgRef.current = avg;
+            const inMeasure = dist <= measureDist;
+            if (flags.measure) {
+              if (inMeasure && !inMeasureRef.current && now - lastMeasureEmitRef.current > 800) {
+                lastMeasureEmitRef.current = now;
+                onEvent?.({
+                  id: nextEventId(),
+                  type: 'in_measure',
+                  timestamp: video.currentTime,
+                  confidence: Math.max(0, Math.min(1, 1 - dist / measureDist)),
+                  meta: { distance: dist, threshold: measureDist },
+                });
+              }
+            }
+            inMeasureRef.current = inMeasure;
+          } else {
+            inMeasureRef.current = false;
+          }
+
           // Tip tracking overlay (approximate weapon tip)
           if (centers.length >= 2) {
             const colors = ['#3d7fff', '#ef4444'];
@@ -284,7 +349,7 @@ export function useMediapipeTracking({
           }
 
           const bestHit = best as BestHit | null;
-          if (flags.touch && bestHit && bestHit.dist <= THRESHOLD && bestSpeedToward >= TOUCH_SPEED) {
+          if (flags.touch && bestHit && bestHit.dist <= touchDist && bestSpeedToward >= touchSpeed) {
             lastTouchRef.current = {
               ts: now,
               x: bestHit.x * canvas.width,
@@ -292,7 +357,7 @@ export function useMediapipeTracking({
             };
             if (now - lastEventEmitRef.current > 800) {
               lastEventEmitRef.current = now;
-              const raw = Math.max(0, Math.min(1, 1 - bestHit.dist / THRESHOLD));
+              const raw = Math.max(0, Math.min(1, 1 - bestHit.dist / touchDist));
               const prevEma = touchEmaRef.current[bestHit.attacker] || 0;
               const ema = prevEma * 0.6 + raw * 0.4;
               touchEmaRef.current[bestHit.attacker] = ema;
@@ -349,7 +414,7 @@ export function useMediapipeTracking({
                 const stableDefender = stableMap[j] ?? j;
                 const lastEmit = lastAttackEmitRef.current[stableAttacker] || 0;
                 const bestPointHit = bestPoint as Point2D | null;
-                if (flags.attack && bestPointHit && bestSpeedToward > ATTACK_SPEED) {
+                if (flags.attack && bestPointHit && bestSpeedToward > attackSpeed) {
                   lastAttackEmitRef.current[stableAttacker] = now;
                   lastAnyAttackRef.current = now;
                   lastAttackRef.current = {
@@ -359,7 +424,7 @@ export function useMediapipeTracking({
                     x2: defenderCenter.x * canvas.width,
                     y2: defenderCenter.y * canvas.height,
                   };
-                  const rawConfidence = Math.max(0, Math.min(1, bestSpeedToward / (ATTACK_SPEED * 2)));
+                  const rawConfidence = Math.max(0, Math.min(1, bestSpeedToward / (attackSpeed * 2)));
                   const prevEma = attackEmaRef.current[stableAttacker] || 0;
                   const ema = prevEma * 0.7 + rawConfidence * 0.3;
                   attackEmaRef.current[stableAttacker] = ema;
@@ -437,7 +502,7 @@ export function useMediapipeTracking({
               scores.sort((a, b) => b.speedToward - a.speedToward);
               const top = scores[0];
               const second = scores[1];
-              const FORWARD_MIN = 0.18;
+              const FORWARD_MIN = BASE_PRIORITY_FORWARD * priorityForwardScale;
               const DELTA_MIN = 0.06;
               const nowMs = now;
               const shouldTake =
@@ -461,6 +526,7 @@ export function useMediapipeTracking({
             }
           }
 
+          lastPosePrevRef.current = lastPoseRef.current;
           lastPoseRef.current = {
             ts: now,
             wrists: res.landmarks.map(lm => {
@@ -531,6 +597,7 @@ export function useMediapipeTracking({
           // Stance + forward foot (approx): compare ankles x positions
           const L_ANKLE = 27;
           const R_ANKLE = 28;
+          const currentCenters: Record<number, { x: number; y: number }> = {};
           centers.forEach(c => {
             const id = stableMap[c.raw];
             if (id === undefined) return;
@@ -539,14 +606,20 @@ export function useMediapipeTracking({
             const rA = lm[R_ANKLE];
             if (!lA || !rA) return;
             const forward: 'L' | 'R' = lA.x < rA.x ? 'L' : 'R';
-            const prevC = lastCentersRef.current[id];
+            const prevC = prevCentersRef.current[id];
             const speed = prevC ? Math.hypot(c.x - prevC.x, c.y - prevC.y) * 30 : 0;
             stanceRef.current[id] = { forward, speed };
-            lastCentersRef.current[id] = { x: c.x, y: c.y };
+            currentCenters[id] = { x: c.x, y: c.y };
           });
+          currentCentersRef.current = currentCenters;
         } else {
           if (onFencerPositions) onFencerPositions([]);
           fencerSmoothRef.current = {};
+          distanceAvgRef.current = null;
+          distanceLastRef.current = null;
+          inMeasureRef.current = false;
+          currentCentersRef.current = null;
+          prevCentersRef.current = {};
         }
       }
       if (modes.hands && handsRef.current) {
@@ -575,12 +648,74 @@ export function useMediapipeTracking({
       }
 
       if (lastAttackRef.current && now - lastAttackRef.current.ts < 500) {
+        const { x1, y1, x2, y2 } = lastAttackRef.current;
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const len = Math.hypot(dx, dy) || 1;
+        const nx = dx / len;
+        const ny = dy / len;
+        const head = 10;
+        const wing = 6;
         ctx.beginPath();
         ctx.strokeStyle = '#f97316';
         ctx.lineWidth = 3;
-        ctx.moveTo(lastAttackRef.current.x1, lastAttackRef.current.y1);
-        ctx.lineTo(lastAttackRef.current.x2, lastAttackRef.current.y2);
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
         ctx.stroke();
+        ctx.beginPath();
+        ctx.fillStyle = '#f97316';
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - nx * head + -ny * wing, y2 - ny * head + nx * wing);
+        ctx.lineTo(x2 - nx * head - -ny * wing, y2 - ny * head - nx * wing);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // Tactical overlay: direction arrows and intent lines
+      if (flags.tactics && lastPoseRef.current && lastPoseRef.current.centers.length >= 2) {
+        const drawArrow = (x: number, y: number, dx: number, dy: number, color: string) => {
+          const len = Math.hypot(dx, dy);
+          if (len < 6) return;
+          const nx = dx / len;
+          const ny = dy / len;
+          const head = 8;
+          const wing = 5;
+          ctx.beginPath();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          ctx.moveTo(x, y);
+          ctx.lineTo(x + dx, y + dy);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.fillStyle = color;
+          ctx.moveTo(x + dx, y + dy);
+          ctx.lineTo(x + dx - nx * head + -ny * wing, y + dy - ny * head + nx * wing);
+          ctx.lineTo(x + dx - nx * head - -ny * wing, y + dy - ny * head - nx * wing);
+          ctx.closePath();
+          ctx.fill();
+        };
+
+        const centers = lastPoseRef.current.centers;
+        const prev = prevCentersRef.current;
+        const prevPose = lastPosePrevRef.current;
+        const dt = Math.max(0.001, ((lastPoseRef.current.ts || now) - (prevPose?.ts || now - 66)) / 1000);
+        const colors = ['#3d7fff', '#ef4444'];
+        centers.forEach((c, id) => {
+          if (!c) return;
+          const p = prev[id];
+          if (!p) return;
+          const vx = (c.x - p.x) / dt;
+          const vy = (c.y - p.y) / dt;
+          const speed = Math.hypot(vx, vy);
+          if (speed < 0.02) return;
+          const scale = Math.min(90, Math.max(25, speed * 160));
+          drawArrow(c.x * canvas.width, c.y * canvas.height, vx * scale, vy * scale, colors[id] || '#3d7fff');
+        });
+      }
+
+      if (currentCentersRef.current) {
+        prevCentersRef.current = currentCentersRef.current;
+        currentCentersRef.current = null;
       }
 
       // Close attack segments after a short inactivity
@@ -639,7 +774,15 @@ export function useMediapipeTracking({
           id: Number(id),
           score: a.score,
         }));
-        onMetrics({ reactionTimes, stance, aggressiveness });
+        const distance = distanceAvgRef.current !== null
+          ? {
+            value: distanceLastRef.current ?? distanceAvgRef.current,
+            avg: distanceAvgRef.current,
+            inMeasure: inMeasureRef.current,
+            threshold: BASE_MEASURE * clamp(safeCalibration.measureDistScale, 0.6, 1.6),
+          }
+          : undefined;
+        onMetrics({ reactionTimes, stance, aggressiveness, distance });
       }
     };
 
@@ -649,7 +792,7 @@ export function useMediapipeTracking({
       rafRef.current = null;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     };
-  }, [enabled, ready, modes, flags, videoRef, canvasRef, onEvent, onPriorityChange, onFencerPositions, onMetrics]);
+  }, [enabled, ready, modes, flags, calibration, videoRef, canvasRef, onEvent, onPriorityChange, onFencerPositions, onMetrics]);
 
   return { ready, error };
 }
