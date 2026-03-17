@@ -11,7 +11,7 @@ import { useVideoPlayer } from './hooks/useVideoPlayer';
 import { useFabricCanvas } from './hooks/useFabricCanvas';
 import { ToolType, Annotation, AnnotationSession } from './types';
 import {
-  createSession, saveSession, loadCurrentSession,
+  createSession, saveSession, loadCurrentSession, clearCurrentSession,
   addAnnotationToSession, removeAnnotationFromSession, updateAnnotationInSession
 } from './utils/storage';
 import { getAnnotationsAtTime } from './utils/export';
@@ -103,6 +103,14 @@ export default function App() {
     const existing = loadCurrentSession();
     if (existing) setSession(existing);
   }, []);
+
+  // When loading a new video file, clear canvas and current session view
+  useEffect(() => {
+    if (!video.videoSrc) return;
+    clearCurrentSession();
+    clearCanvas();
+    setSession(null);
+  }, [video.videoSrc, clearCanvas]);
 
   // Create session when video is loaded
   useEffect(() => {

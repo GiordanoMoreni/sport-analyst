@@ -42,6 +42,14 @@ export function deleteSession(id: string): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
 }
 
+export function clearCurrentSession(): void {
+  const id = localStorage.getItem(CURRENT_SESSION_KEY);
+  if (id) {
+    deleteSession(id);
+  }
+  localStorage.removeItem(CURRENT_SESSION_KEY);
+}
+
 export function createSession(videoName: string, videoDuration: number): AnnotationSession {
   return {
     id: `session_${Date.now()}`,

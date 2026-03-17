@@ -372,7 +372,7 @@ export function useFabricCanvas(
     if (annotationIds.length) {
       onObjectsDeleted?.(annotationIds);
     }
-  }, []);
+  }, [onObjectsDeleted]);
 
   const deleteByAnnotationId = useCallback((annotationId: string) => {
     const canvas = fabricRef.current;
