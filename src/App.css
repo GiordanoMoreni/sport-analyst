@@ -437,6 +437,20 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   gap: 4px;
 }
 .ai-modes.disabled { opacity: 0.5; }
+.ai-flags {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 8px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+.ai-flags label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ai-flags.disabled { opacity: 0.5; }
 .ai-status { margin-left: auto; font-size: 11px; color: var(--text-muted); }
 .ai-priority {
   margin-left: 10px;
@@ -446,8 +460,17 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   font-size: 11px;
   color: var(--text-secondary);
   background: var(--bg-surface);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .ai-priority.none { opacity: 0.6; }
+.ai-priority.f1 { border-color: rgba(61, 127, 255, 0.6); }
+.ai-priority.f2 { border-color: rgba(239, 68, 68, 0.6); }
+.ai-priority-conf {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-muted);
+}
 
 .ai-canvas {
   position: absolute;
@@ -456,6 +479,40 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   height: 100%;
   z-index: 2;
   pointer-events: none;
+}
+.fencer-tag {
+  position: absolute;
+  transform: translate(-50%, -130%);
+  padding: 2px 6px;
+  font-size: 11px;
+  border-radius: 10px;
+  background: rgba(61, 127, 255, 0.85);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  z-index: 4;
+  pointer-events: none;
+  font-weight: 600;
+}
+.fencer-tag.priority {
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.5), 0 0 12px rgba(239, 68, 68, 0.6);
+  background: rgba(239, 68, 68, 0.9);
+}
+.priority-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  padding: 4px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  color: #fff;
+  z-index: 5;
+  background: rgba(61, 127, 255, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  pointer-events: none;
+  font-weight: 600;
+}
+.priority-badge.f2 {
+  background: rgba(239, 68, 68, 0.85);
 }
 
 /* ─── Timeline ────────────────────────────────────── */

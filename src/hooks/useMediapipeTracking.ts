@@ -15,9 +15,16 @@ export type AIMode = {
   face: boolean;
 };
 
+export type AIEventFlags = {
+  attack: boolean;
+  touch: boolean;
+  priority: boolean;
+};
+
 interface UseMediapipeTrackingOptions {
   enabled: boolean;
   modes: AIMode;
+  flags: AIEventFlags;
   videoRef: React.RefObject<HTMLVideoElement>;
   canvasRef: React.RefObject<HTMLCanvasElement>;
   onEvent?: (event: {
@@ -32,6 +39,7 @@ interface UseMediapipeTrackingOptions {
     confidence: number;
     since: number | null;
   }) => void;
+  onFencerPositions?: (positions: { id: number; x: number; y: number }[]) => void;
 }
 
 const WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm';
@@ -42,10 +50,12 @@ const FACE_MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmar
 export function useMediapipeTracking({
   enabled,
   modes,
+  flags,
   videoRef,
   canvasRef,
   onEvent,
   onPriorityChange,
+  onFencerPositions,
 }: UseMediapipeTrackingOptions) {
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -59,10 +69,12 @@ export function useMediapipeTracking({
   const lastTouchRef = useRef<{ ts: number; x: number; y: number } | null>(null);
   const lastEventEmitRef = useRef(0);
   const lastAttackRef = useRef<{ ts: number; x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const attackTrackRef = useRef<Record<number, { start: number; last: number }>>({});
   const lastPoseRef = useRef<{
     ts: number;
     wrists: { x: number; y: number }[][];
     elbows: { x: number; y: number }[][];
+    centers: ({ x: number; y: number } | null)[];
   } | null>(null);
   const lastAttackEmitRef = useRef<Record<number, number>>({});
   const attackEmaRef = useRef<Record<number, number>>({});
@@ -73,6 +85,7 @@ export function useMediapipeTracking({
     since: null,
   });
   const lastAnyAttackRef = useRef(0);
+  const lastPriorityEmitRef = useRef(0);
 
   const nextEventId = () => {
     eventSeqRef.current += 1;
@@ -179,7 +192,18 @@ export function useMediapipeTracking({
           };
 
           let bestSpeedToward = 0;
+          const fencerPositions: { id: number; x: number; y: number }[] = [];
+          const centers: { id: number; x: number; y: number }[] = [];
           for (let i = 0; i < res.landmarks.length; i += 1) {
+            const center = torsoCenter(res.landmarks[i]);
+            if (center) {
+              fencerPositions.push({
+                id: i,
+                x: center.x * canvas.width,
+                y: center.y * canvas.height,
+              });
+              centers.push({ id: i, x: center.x, y: center.y });
+            }
             for (let j = 0; j < res.landmarks.length; j += 1) {
               if (i === j) continue;
               const attacker = res.landmarks[i];
@@ -218,7 +242,7 @@ export function useMediapipeTracking({
           }
 
           const bestHit = best as BestHit | null;
-          if (bestHit && bestHit.dist <= THRESHOLD && bestSpeedToward >= TOUCH_SPEED) {
+          if (flags.touch && bestHit && bestHit.dist <= THRESHOLD && bestSpeedToward >= TOUCH_SPEED) {
             lastTouchRef.current = {
               ts: now,
               x: bestHit.x * canvas.width,
@@ -281,7 +305,7 @@ export function useMediapipeTracking({
 
                 const lastEmit = lastAttackEmitRef.current[i] || 0;
                 const bestPointHit = bestPoint as Point2D | null;
-                if (bestPointHit && bestSpeedToward > ATTACK_SPEED && now - lastEmit > ATTACK_COOLDOWN) {
+                if (flags.attack && bestPointHit && bestSpeedToward > ATTACK_SPEED) {
                   lastAttackEmitRef.current[i] = now;
                   lastAnyAttackRef.current = now;
                   lastAttackRef.current = {
@@ -295,24 +319,74 @@ export function useMediapipeTracking({
                   const prevEma = attackEmaRef.current[i] || 0;
                   const ema = prevEma * 0.7 + rawConfidence * 0.3;
                   attackEmaRef.current[i] = ema;
-                  onEvent?.({
-                    id: nextEventId(),
-                    type: 'attack',
-                    timestamp: video.currentTime,
-                    confidence: ema,
-                    meta: { attacker: i, defender: j },
-                  });
-
-                  const pr = priorityRef.current;
-                  const shouldSwitch =
-                    pr.holder === null ||
-                    pr.holder === i ||
-                    ema > pr.confidence + 0.1 ||
-                    (pr.since !== null && now - pr.since > 1200);
-                  if (shouldSwitch) {
-                    priorityRef.current = { holder: i, confidence: ema, since: now };
-                    onPriorityChange?.(priorityRef.current);
+                  const track = attackTrackRef.current[i];
+                  if (!track) {
+                    attackTrackRef.current[i] = { start: video.currentTime, last: video.currentTime };
+                  } else {
+                    track.last = video.currentTime;
                   }
+
+                  if (now - lastEmit > ATTACK_COOLDOWN) {
+                    onEvent?.({
+                      id: nextEventId(),
+                      type: 'attack',
+                      timestamp: video.currentTime,
+                      confidence: ema,
+                      meta: { attacker: i, defender: j, phase: 'start' },
+                    });
+                  }
+
+                  if (flags.priority) {
+                    const pr = priorityRef.current;
+                    const shouldSwitch =
+                      pr.holder === null ||
+                      pr.holder === i ||
+                      ema > pr.confidence + 0.1 ||
+                      (pr.since !== null && now - pr.since > 1200);
+                    if (shouldSwitch) {
+                      priorityRef.current = { holder: i, confidence: ema, since: now };
+                      onPriorityChange?.(priorityRef.current);
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          // Priority from forward movement (torso moving toward opponent)
+          if (flags.priority && prev && centers.length >= 2) {
+            const dt = Math.max(0.001, (now - prev.ts) / 1000);
+            const scores: { id: number; speedToward: number }[] = [];
+            for (let i = 0; i < centers.length; i += 1) {
+              const a = centers[i];
+              const b = centers[(i + 1) % centers.length];
+              const prevCenter = prev.centers[a.id];
+              if (!prevCenter) continue;
+              const vx = (a.x - prevCenter.x) / dt;
+              const vy = (a.y - prevCenter.y) / dt;
+              const dx = b.x - a.x;
+              const dy = b.y - a.y;
+              const inv = 1 / (Math.hypot(dx, dy) + 1e-6);
+              const speedToward = vx * (dx * inv) + vy * (dy * inv);
+              scores.push({ id: a.id, speedToward });
+            }
+
+            if (scores.length >= 2) {
+              scores.sort((a, b) => b.speedToward - a.speedToward);
+              const top = scores[0];
+              const second = scores[1];
+              const FORWARD_MIN = 0.18;
+              const DELTA_MIN = 0.06;
+              const nowMs = now;
+              if (top.speedToward > FORWARD_MIN && top.speedToward - second.speedToward > DELTA_MIN) {
+                if (nowMs - lastPriorityEmitRef.current > 400) {
+                  lastPriorityEmitRef.current = nowMs;
+                  priorityRef.current = {
+                    holder: top.id,
+                    confidence: Math.min(1, (top.speedToward - FORWARD_MIN) / 0.3),
+                    since: nowMs,
+                  };
+                  onPriorityChange?.(priorityRef.current);
                 }
               }
             }
@@ -336,7 +410,23 @@ export function useMediapipeTracking({
                 r ? { x: r.x, y: r.y } : null,
               ].filter(Boolean) as { x: number; y: number }[];
             }),
+            centers: res.landmarks.map(lm => torsoCenter(lm)),
           };
+
+          if (onFencerPositions) {
+            let visible = fencerPositions;
+            if (visible.length >= 2) {
+              const a = visible[0];
+              const b = visible[1];
+              const dx = (a.x - b.x) / canvas.width;
+              const dy = (a.y - b.y) / canvas.height;
+              const dist = Math.hypot(dx, dy);
+              if (dist < 0.15) visible = [];
+            } else {
+              visible = [];
+            }
+            onFencerPositions(visible);
+          }
         }
       }
       if (modes.hands && handsRef.current) {
@@ -373,7 +463,27 @@ export function useMediapipeTracking({
         ctx.stroke();
       }
 
-      if (priorityRef.current.holder !== null && now - lastAnyAttackRef.current > 2000) {
+      // Close attack segments after a short inactivity
+      const ATTACK_END_GAP = 0.35;
+      const ATTACK_MIN_DUR = 0.2;
+      Object.entries(attackTrackRef.current).forEach(([key, seg]) => {
+        const id = Number(key);
+        if (video.currentTime - seg.last > ATTACK_END_GAP) {
+          const duration = Math.max(0, seg.last - seg.start);
+          if (duration >= ATTACK_MIN_DUR) {
+            onEvent?.({
+              id: nextEventId(),
+              type: 'attack',
+              timestamp: seg.start,
+              confidence: attackEmaRef.current[id] || 0.5,
+              meta: { attacker: id, duration, phase: 'segment' },
+            });
+          }
+          delete attackTrackRef.current[id];
+        }
+      });
+
+      if (flags.priority && priorityRef.current.holder !== null && now - lastAnyAttackRef.current > 2000) {
         priorityRef.current = { holder: null, confidence: 0, since: null };
         onPriorityChange?.(priorityRef.current);
       }
@@ -385,7 +495,7 @@ export function useMediapipeTracking({
       rafRef.current = null;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     };
-  }, [enabled, ready, modes, videoRef, canvasRef, onEvent, onPriorityChange]);
+  }, [enabled, ready, modes, flags, videoRef, canvasRef, onEvent, onPriorityChange, onFencerPositions]);
 
   return { ready, error };
 }

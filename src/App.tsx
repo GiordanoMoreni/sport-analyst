@@ -10,7 +10,7 @@ import { ExportPanel } from './components/ExportPanel';
 import { AIEventsPanel } from './components/AIEventsPanel';
 import { useVideoPlayer } from './hooks/useVideoPlayer';
 import { useFabricCanvas } from './hooks/useFabricCanvas';
-import { useMediapipeTracking, AIMode } from './hooks/useMediapipeTracking';
+import { useMediapipeTracking, AIMode, AIEventFlags } from './hooks/useMediapipeTracking';
 import { ToolType, Annotation, AnnotationSession, AIEvent } from './types';
 import {
   createSession, saveSession, loadCurrentSession, clearCurrentSession,
@@ -43,15 +43,22 @@ export default function App() {
     hands: true,
     face: true,
   });
+  const [aiFlags, setAiFlags] = useState<AIEventFlags>({
+    attack: true,
+    touch: true,
+    priority: true,
+  });
   const [aiEvents, setAiEvents] = useState<AIEvent[]>([]);
   const [aiPriority, setAiPriority] = useState<{ holder: number | null; confidence: number }>({
     holder: null,
     confidence: 0,
   });
+  const [aiFencers, setAiFencers] = useState<{ id: number; x: number; y: number }[]>([]);
 
   const { ready: aiReady, error: aiError } = useMediapipeTracking({
     enabled: aiEnabled,
     modes: aiModes,
+    flags: aiFlags,
     videoRef: video.videoRef,
     canvasRef: aiCanvasRef,
     onEvent: (event) => {
@@ -63,7 +70,16 @@ export default function App() {
     onPriorityChange: (state) => {
       setAiPriority({ holder: state.holder, confidence: state.confidence });
     },
+    onFencerPositions: (positions) => {
+      setAiFencers(positions);
+    },
   });
+
+  useEffect(() => {
+    if (!aiEnabled || !aiFlags.priority) {
+      setAiPriority({ holder: null, confidence: 0 });
+    }
+  }, [aiEnabled, aiFlags.priority]);
 
   const {
     clearCanvas,
@@ -388,12 +404,44 @@ export default function App() {
                 Face
               </label>
             </div>
+            <div className={`ai-flags ${aiEnabled ? '' : 'disabled'}`}>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={aiFlags.attack}
+                  onChange={e => setAiFlags(f => ({ ...f, attack: e.target.checked }))}
+                  disabled={!aiEnabled}
+                />
+                Attacco
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={aiFlags.touch}
+                  onChange={e => setAiFlags(f => ({ ...f, touch: e.target.checked }))}
+                  disabled={!aiEnabled}
+                />
+                Tocco
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={aiFlags.priority}
+                  onChange={e => setAiFlags(f => ({ ...f, priority: e.target.checked }))}
+                  disabled={!aiEnabled}
+                />
+                Priorita
+              </label>
+            </div>
             <div className="ai-status">
               {aiEnabled && !aiReady && !aiError && 'Caricamento modelli...'}
               {aiEnabled && aiError && 'Errore AI'}
             </div>
-            <div className={`ai-priority ${aiPriority.holder === null ? 'none' : ''}`}>
-              Priorita: {aiPriority.holder === null ? '—' : `F${aiPriority.holder + 1}`}
+            <div className={`ai-priority ${aiPriority.holder === null ? 'none' : `f${aiPriority.holder + 1}`}`}>
+              Priorita: {aiFlags.priority ? (aiPriority.holder === null ? '—' : `F${aiPriority.holder + 1}`) : 'OFF'}
+              {aiFlags.priority && aiPriority.holder !== null && (
+                <span className="ai-priority-conf">{Math.round(aiPriority.confidence * 100)}%</span>
+              )}
             </div>
           </div>
 
@@ -405,6 +453,20 @@ export default function App() {
               playsInline
               preload="metadata"
             />
+            {aiFlags.priority && aiPriority.holder !== null && (
+              <div className={`priority-badge f${aiPriority.holder + 1}`}>
+                Priorita: F{aiPriority.holder + 1}
+              </div>
+            )}
+            {aiEnabled && aiModes.pose && aiFencers.length >= 2 && aiFencers.map(f => (
+              <div
+                key={`fencer-${f.id}`}
+                className={`fencer-tag ${aiPriority.holder === f.id ? 'priority' : ''}`}
+                style={{ left: f.x, top: f.y }}
+              >
+                F{f.id + 1}
+              </div>
+            ))}
             <canvas
               ref={aiCanvasRef}
               className="ai-canvas"
