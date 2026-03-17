@@ -9,6 +9,7 @@ import { Timeline } from './components/Timeline';
 import { ExportPanel } from './components/ExportPanel';
 import { useVideoPlayer } from './hooks/useVideoPlayer';
 import { useFabricCanvas } from './hooks/useFabricCanvas';
+import { useMediapipeTracking, AIMode } from './hooks/useMediapipeTracking';
 import { ToolType, Annotation, AnnotationSession } from './types';
 import {
   createSession, saveSession, loadCurrentSession, clearCurrentSession,
@@ -32,8 +33,22 @@ export default function App() {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const aiCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const video = useVideoPlayer();
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const [aiModes, setAiModes] = useState<AIMode>({
+    pose: true,
+    hands: true,
+    face: true,
+  });
+
+  const { ready: aiReady, error: aiError } = useMediapipeTracking({
+    enabled: aiEnabled,
+    modes: aiModes,
+    videoRef: video.videoRef,
+    canvasRef: aiCanvasRef,
+  });
 
   const {
     clearCanvas,
@@ -313,6 +328,50 @@ export default function App() {
             objectCount={objectCount}
           />
 
+          <div className="ai-controls">
+            <label className="ai-toggle">
+              <input
+                type="checkbox"
+                checked={aiEnabled}
+                onChange={e => setAiEnabled(e.target.checked)}
+              />
+              AI Tracking
+            </label>
+            <div className={`ai-modes ${aiEnabled ? '' : 'disabled'}`}>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={aiModes.pose}
+                  onChange={e => setAiModes(m => ({ ...m, pose: e.target.checked }))}
+                  disabled={!aiEnabled}
+                />
+                Pose
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={aiModes.hands}
+                  onChange={e => setAiModes(m => ({ ...m, hands: e.target.checked }))}
+                  disabled={!aiEnabled}
+                />
+                Hands
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={aiModes.face}
+                  onChange={e => setAiModes(m => ({ ...m, face: e.target.checked }))}
+                  disabled={!aiEnabled}
+                />
+                Face
+              </label>
+            </div>
+            <div className="ai-status">
+              {aiEnabled && !aiReady && !aiError && 'Caricamento modelli...'}
+              {aiEnabled && aiError && 'Errore AI'}
+            </div>
+          </div>
+
           <div className="video-container" ref={containerRef}>
             <video
               ref={video.videoRef}
@@ -320,6 +379,16 @@ export default function App() {
               className="video-el"
               playsInline
               preload="metadata"
+            />
+            <canvas
+              ref={aiCanvasRef}
+              className="ai-canvas"
+              width={canvasSize.width || 0}
+              height={canvasSize.height || 0}
+              style={{
+                width: canvasSize.width,
+                height: canvasSize.height,
+              }}
             />
             <canvas
               ref={canvasRef}

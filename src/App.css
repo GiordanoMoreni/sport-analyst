@@ -395,7 +395,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   top: 0 !important; left: 0 !important;
   width: 100% !important;
   height: 100% !important;
-  z-index: 2;
+  z-index: 3;
 }
 
 /* Allow drawing interactions on the fabric overlay */
@@ -403,6 +403,44 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 .video-container .canvas-container .upper-canvas,
 .video-container .canvas-container .lower-canvas {
   pointer-events: auto;
+}
+
+.ai-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.ai-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.ai-modes {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.ai-modes label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ai-modes.disabled { opacity: 0.5; }
+.ai-status { margin-left: auto; font-size: 11px; color: var(--text-muted); }
+
+.ai-canvas {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  pointer-events: none;
 }
 
 /* ─── Timeline ────────────────────────────────────── */
