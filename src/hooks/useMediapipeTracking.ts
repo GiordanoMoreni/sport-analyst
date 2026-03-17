@@ -86,6 +86,7 @@ export function useMediapipeTracking({
   });
   const lastAnyAttackRef = useRef(0);
   const lastPriorityEmitRef = useRef(0);
+  const lastCentersRef = useRef<Record<number, { x: number; y: number }>>({});
 
   const nextEventId = () => {
     eventSeqRef.current += 1;
@@ -193,17 +194,24 @@ export function useMediapipeTracking({
 
           let bestSpeedToward = 0;
           const fencerPositions: { id: number; x: number; y: number }[] = [];
-          const centers: { id: number; x: number; y: number }[] = [];
+          const centers: { raw: number; x: number; y: number }[] = [];
           for (let i = 0; i < res.landmarks.length; i += 1) {
             const center = torsoCenter(res.landmarks[i]);
             if (center) {
-              fencerPositions.push({
-                id: i,
-                x: center.x * canvas.width,
-                y: center.y * canvas.height,
-              });
-              centers.push({ id: i, x: center.x, y: center.y });
+              centers.push({ raw: i, x: center.x, y: center.y });
             }
+          }
+          const stableMap: Record<number, number> = {};
+          if (centers.length >= 2) {
+            const sorted = [...centers].sort((a, b) => a.x - b.x);
+            stableMap[sorted[0].raw] = 0;
+            stableMap[sorted[1].raw] = 1;
+            fencerPositions.push(
+              { id: 0, x: sorted[0].x * canvas.width, y: sorted[0].y * canvas.height },
+              { id: 1, x: sorted[1].x * canvas.width, y: sorted[1].y * canvas.height }
+            );
+          }
+          for (let i = 0; i < res.landmarks.length; i += 1) {
             for (let j = 0; j < res.landmarks.length; j += 1) {
               if (i === j) continue;
               const attacker = res.landmarks[i];
@@ -235,7 +243,9 @@ export function useMediapipeTracking({
                   }
                 }
                 if (!best || dist < best.dist) {
-                  best = { dist, x: tip.x, y: tip.y, attacker: i, defender: j };
+                  const attackerId = stableMap[i] ?? i;
+                  const defenderId = stableMap[j] ?? j;
+                  best = { dist, x: tip.x, y: tip.y, attacker: attackerId, defender: defenderId };
                 }
               });
             }
@@ -303,10 +313,12 @@ export function useMediapipeTracking({
                   }
                 });
 
-                const lastEmit = lastAttackEmitRef.current[i] || 0;
+                const stableAttacker = stableMap[i] ?? i;
+                const stableDefender = stableMap[j] ?? j;
+                const lastEmit = lastAttackEmitRef.current[stableAttacker] || 0;
                 const bestPointHit = bestPoint as Point2D | null;
                 if (flags.attack && bestPointHit && bestSpeedToward > ATTACK_SPEED) {
-                  lastAttackEmitRef.current[i] = now;
+                  lastAttackEmitRef.current[stableAttacker] = now;
                   lastAnyAttackRef.current = now;
                   lastAttackRef.current = {
                     ts: now,
@@ -316,12 +328,12 @@ export function useMediapipeTracking({
                     y2: defenderCenter.y * canvas.height,
                   };
                   const rawConfidence = Math.max(0, Math.min(1, bestSpeedToward / (ATTACK_SPEED * 2)));
-                  const prevEma = attackEmaRef.current[i] || 0;
+                  const prevEma = attackEmaRef.current[stableAttacker] || 0;
                   const ema = prevEma * 0.7 + rawConfidence * 0.3;
-                  attackEmaRef.current[i] = ema;
-                  const track = attackTrackRef.current[i];
+                  attackEmaRef.current[stableAttacker] = ema;
+                  const track = attackTrackRef.current[stableAttacker];
                   if (!track) {
-                    attackTrackRef.current[i] = { start: video.currentTime, last: video.currentTime };
+                    attackTrackRef.current[stableAttacker] = { start: video.currentTime, last: video.currentTime };
                   } else {
                     track.last = video.currentTime;
                   }
@@ -332,7 +344,7 @@ export function useMediapipeTracking({
                       type: 'attack',
                       timestamp: video.currentTime,
                       confidence: ema,
-                      meta: { attacker: i, defender: j, phase: 'start' },
+                      meta: { attacker: stableAttacker, defender: stableDefender, phase: 'start' },
                     });
                   }
 
@@ -340,11 +352,11 @@ export function useMediapipeTracking({
                     const pr = priorityRef.current;
                     const shouldSwitch =
                       pr.holder === null ||
-                      pr.holder === i ||
+                      pr.holder === stableAttacker ||
                       ema > pr.confidence + 0.1 ||
                       (pr.since !== null && now - pr.since > 1200);
                     if (shouldSwitch) {
-                      priorityRef.current = { holder: i, confidence: ema, since: now };
+                      priorityRef.current = { holder: stableAttacker, confidence: ema, since: now };
                       onPriorityChange?.(priorityRef.current);
                     }
                   }
@@ -360,7 +372,10 @@ export function useMediapipeTracking({
             for (let i = 0; i < centers.length; i += 1) {
               const a = centers[i];
               const b = centers[(i + 1) % centers.length];
-              const prevCenter = prev.centers[a.id];
+              const aId = stableMap[a.raw];
+              const bId = stableMap[b.raw];
+              if (aId === undefined || bId === undefined) continue;
+              const prevCenter = prev.centers[aId];
               if (!prevCenter) continue;
               const vx = (a.x - prevCenter.x) / dt;
               const vy = (a.y - prevCenter.y) / dt;
@@ -368,7 +383,7 @@ export function useMediapipeTracking({
               const dy = b.y - a.y;
               const inv = 1 / (Math.hypot(dx, dy) + 1e-6);
               const speedToward = vx * (dx * inv) + vy * (dy * inv);
-              scores.push({ id: a.id, speedToward });
+              scores.push({ id: aId, speedToward });
             }
 
             if (scores.length >= 2) {
@@ -378,7 +393,13 @@ export function useMediapipeTracking({
               const FORWARD_MIN = 0.18;
               const DELTA_MIN = 0.06;
               const nowMs = now;
-              if (top.speedToward > FORWARD_MIN && top.speedToward - second.speedToward > DELTA_MIN) {
+              const shouldTake =
+                top.speedToward > FORWARD_MIN &&
+                top.speedToward - second.speedToward > DELTA_MIN &&
+                (priorityRef.current.holder === null ||
+                  top.id !== priorityRef.current.holder &&
+                  top.speedToward > second.speedToward + 0.08);
+              if (shouldTake) {
                 if (nowMs - lastPriorityEmitRef.current > 400) {
                   lastPriorityEmitRef.current = nowMs;
                   priorityRef.current = {
@@ -410,7 +431,14 @@ export function useMediapipeTracking({
                 r ? { x: r.x, y: r.y } : null,
               ].filter(Boolean) as { x: number; y: number }[];
             }),
-            centers: res.landmarks.map(lm => torsoCenter(lm)),
+            centers: (() => {
+              const map: ({ x: number; y: number } | null)[] = [];
+              centers.forEach(c => {
+                const id = stableMap[c.raw];
+                if (id !== undefined) map[id] = { x: c.x, y: c.y };
+              });
+              return map;
+            })(),
           };
 
           if (onFencerPositions) {

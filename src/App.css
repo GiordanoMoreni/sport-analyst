@@ -493,9 +493,10 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   pointer-events: none;
   font-weight: 600;
 }
+.fencer-tag.f2 { background: rgba(239, 68, 68, 0.85); }
 .fencer-tag.priority {
-  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.5), 0 0 12px rgba(239, 68, 68, 0.6);
-  background: rgba(239, 68, 68, 0.9);
+  animation: priorityPulse 0.9s ease-in-out infinite;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35), 0 0 12px rgba(255, 255, 255, 0.6);
 }
 .priority-badge {
   position: absolute;
@@ -513,6 +514,12 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 }
 .priority-badge.f2 {
   background: rgba(239, 68, 68, 0.85);
+}
+
+@keyframes priorityPulse {
+  0% { transform: translate(-50%, -130%) scale(1); }
+  50% { transform: translate(-50%, -130%) scale(1.08); }
+  100% { transform: translate(-50%, -130%) scale(1); }
 }
 
 /* ─── Timeline ────────────────────────────────────── */

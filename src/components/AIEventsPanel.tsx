@@ -53,9 +53,13 @@ export const AIEventsPanel: React.FC<AIEventsPanelProps> = ({
           )}
           {sorted.map(evt => {
             const isActive = Math.abs(currentTime - evt.timestamp) < 0.4;
+            const attacker = (evt.meta && typeof evt.meta === 'object' && 'attacker' in evt.meta)
+              ? (evt.meta as { attacker?: number }).attacker
+              : undefined;
+            const color = attacker === 1 ? '#ef4444' : '#3d7fff';
             return (
               <div key={evt.id} className={`annotation-item ${isActive ? 'active' : ''}`}>
-                <div className="ann-color-dot" style={{ background: '#ef4444' }} />
+                <div className="ann-color-dot" style={{ background: color }} />
                 <div className="ann-body">
                   <div className="ann-meta">
                     <span className="ann-type">

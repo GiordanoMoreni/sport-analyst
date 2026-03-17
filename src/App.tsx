@@ -461,7 +461,7 @@ export default function App() {
             {aiEnabled && aiModes.pose && aiFencers.length >= 2 && aiFencers.map(f => (
               <div
                 key={`fencer-${f.id}`}
-                className={`fencer-tag ${aiPriority.holder === f.id ? 'priority' : ''}`}
+                className={`fencer-tag f${f.id + 1} ${aiPriority.holder === f.id ? 'priority' : ''}`}
                 style={{ left: f.x, top: f.y }}
               >
                 F{f.id + 1}
