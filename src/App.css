@@ -144,6 +144,22 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   display: flex; align-items: center; gap: 6px;
 }
 .panel-header-actions { display: flex; align-items: center; gap: 8px; color: var(--text-muted); }
+.duration-default {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.duration-select {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.duration-select:focus { outline: none; border-color: var(--accent); }
 .badge {
   display: inline-flex; align-items: center; justify-content: center;
   background: var(--accent); color: #fff;
@@ -168,11 +184,15 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   padding: 10px 16px;
   border-left: 2px solid transparent;
   transition: background 0.1s, border-color 0.1s;
+  position: relative;
 }
 .annotation-item:hover { background: var(--bg-hover); }
 .annotation-item.active {
   background: rgba(61, 127, 255, 0.08);
   border-left-color: var(--accent);
+}
+.annotation-item.fading {
+  background: rgba(61, 127, 255, 0.06);
 }
 
 .ann-color-dot {
@@ -190,6 +210,38 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   cursor: pointer; transition: background 0.1s;
 }
 .ann-time:hover { background: rgba(61, 127, 255, 0.2); }
+.ann-duration {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.ann-duration-input {
+  width: 44px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.ann-duration-input:focus { outline: none; border-color: var(--accent); }
+.ann-duration-suffix { font-family: 'JetBrains Mono', monospace; }
+
+.ann-fadebar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: rgba(61, 127, 255, 0.12);
+}
+.ann-fadebar-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.1s linear;
+}
 .ann-label {
   font-size: 12px; color: var(--text-secondary);
   cursor: pointer; padding: 2px 4px; border-radius: 3px;

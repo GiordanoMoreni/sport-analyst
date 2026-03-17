@@ -8,9 +8,12 @@ import { Trash2, ChevronDown, ChevronUp, Bookmark } from 'lucide-react';
 interface AnnotationPanelProps {
   annotations: Annotation[];
   currentTime: number;
+  defaultDuration: number;
   onJumpTo: (time: number) => void;
   onDelete: (id: string) => void;
   onUpdateLabel: (id: string, label: string) => void;
+  onUpdateDuration: (id: string, duration: number) => void;
+  onDefaultDurationChange: (duration: number) => void;
   onAddCurrentAsKeyFrame: () => void;
 }
 
@@ -27,9 +30,12 @@ const TOOL_LABELS: Record<string, string> = {
 export const AnnotationPanel: React.FC<AnnotationPanelProps> = ({
   annotations,
   currentTime,
+  defaultDuration,
   onJumpTo,
   onDelete,
   onUpdateLabel,
+  onUpdateDuration,
+  onDefaultDurationChange,
   onAddCurrentAsKeyFrame,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
@@ -55,6 +61,20 @@ export const AnnotationPanel: React.FC<AnnotationPanelProps> = ({
           Annotazioni <span className="badge">{annotations.length}</span>
         </span>
         <div className="panel-header-actions">
+          <div className="duration-default">
+            <span>Durata</span>
+            <select
+              className="duration-select"
+              value={defaultDuration}
+              onClick={e => e.stopPropagation()}
+              onChange={e => onDefaultDurationChange(parseFloat(e.target.value))}
+              title="Durata annotazioni (default)"
+            >
+              {[1, 2, 3, 4, 5, 8, 10].map(s => (
+                <option key={s} value={s}>{s}s</option>
+              ))}
+            </select>
+          </div>
           <button
             className="icon-btn"
             onClick={e => { e.stopPropagation(); onAddCurrentAsKeyFrame(); }}
@@ -75,10 +95,14 @@ export const AnnotationPanel: React.FC<AnnotationPanelProps> = ({
           )}
           {sorted.map(ann => {
             const isActive = currentTime >= ann.timestamp && currentTime <= ann.timestamp + (ann.duration || 3);
+            const endTime = ann.timestamp + (ann.duration || 0);
+            const remaining = Math.max(0, endTime - currentTime);
+            const remainingPct = ann.duration > 0 ? Math.max(0, Math.min(1, remaining / ann.duration)) : 0;
+            const isFading = isActive && remaining <= 0.75;
             return (
               <div
                 key={ann.id}
-                className={`annotation-item ${isActive ? 'active' : ''}`}
+                className={`annotation-item ${isActive ? 'active' : ''} ${isFading ? 'fading' : ''}`}
               >
                 <div
                   className="ann-color-dot"
@@ -93,6 +117,21 @@ export const AnnotationPanel: React.FC<AnnotationPanelProps> = ({
                     >
                       {formatTimestamp(ann.timestamp)}
                     </button>
+                    <div className="ann-duration">
+                      <input
+                        className="ann-duration-input"
+                        type="number"
+                        min={0.1}
+                        step={0.1}
+                        value={ann.duration}
+                        onChange={e => {
+                          const v = Math.max(0.1, parseFloat(e.target.value || '0'));
+                          onUpdateDuration(ann.id, v);
+                        }}
+                        title="Durata (secondi)"
+                      />
+                      <span className="ann-duration-suffix">s</span>
+                    </div>
                   </div>
                   {editingId === ann.id ? (
                     <input
@@ -123,6 +162,14 @@ export const AnnotationPanel: React.FC<AnnotationPanelProps> = ({
                 >
                   <Trash2 size={14} />
                 </button>
+                {isActive && (
+                  <div className="ann-fadebar">
+                    <div
+                      className="ann-fadebar-fill"
+                      style={{ width: `${remainingPct * 100}%` }}
+                    />
+                  </div>
+                )}
               </div>
             );
           })}

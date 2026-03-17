@@ -385,6 +385,42 @@ export function useFabricCanvas(
     }
   }, []);
 
+  const updateVisibilityByTime = useCallback(
+    (annotations: { id: string; timestamp: number; duration: number }[], currentTime: number) => {
+      const canvas = fabricRef.current;
+      if (!canvas) return;
+      const FADE_WINDOW = 0.75;
+      const activeMap = new Map<string, number>();
+      annotations.forEach(a => {
+        const end = a.timestamp + (a.duration || 0);
+        if (currentTime >= a.timestamp && currentTime <= end) {
+          const remaining = Math.max(0, end - currentTime);
+          const opacity = a.duration > 0 ? Math.min(1, remaining / FADE_WINDOW) : 1;
+          activeMap.set(a.id, opacity);
+        }
+      });
+      let changed = false;
+      canvas.getObjects().forEach(obj => {
+        const id = (obj as any).annotationId as string | undefined;
+        if (!id) return;
+        const shouldBeVisible = activeMap.has(id);
+        const targetOpacity = shouldBeVisible ? activeMap.get(id)! : 0;
+        if (obj.visible !== shouldBeVisible) {
+          obj.visible = shouldBeVisible;
+          changed = true;
+        }
+        if (obj.opacity !== targetOpacity) {
+          obj.opacity = targetOpacity;
+          changed = true;
+        }
+      });
+      if (changed) {
+        canvas.renderAll();
+      }
+    },
+    []
+  );
+
   const getCanvasJSON = useCallback((): string => {
     return JSON.stringify(fabricRef.current?.toJSON() || {});
   }, []);
@@ -412,6 +448,7 @@ export function useFabricCanvas(
     clearCanvas,
     deleteSelected,
     deleteByAnnotationId,
+    updateVisibilityByTime,
     getCanvasJSON,
     loadFromJSON,
     getCanvasElement,

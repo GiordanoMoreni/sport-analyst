@@ -14,17 +14,21 @@ import {
   createSession, saveSession, loadCurrentSession, clearCurrentSession,
   addAnnotationToSession, removeAnnotationFromSession, updateAnnotationInSession
 } from './utils/storage';
-import { getAnnotationsAtTime } from './utils/export';
 import './App.css';
 
 export default function App() {
   const DEBUG = true;
+  const DEFAULT_DURATION_KEY = 'sport_analyst_default_duration';
   const [currentTool, setCurrentTool] = useState<ToolType>('arrow');
   const [currentColor, setCurrentColor] = useState('#FF3B3B');
   const [strokeWidth, setStrokeWidth] = useState(4);
   const [session, setSession] = useState<AnnotationSession | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
-  const [annotationDuration] = useState(4); // seconds annotation stays visible
+  const [annotationDuration, setAnnotationDuration] = useState(() => {
+    const raw = localStorage.getItem(DEFAULT_DURATION_KEY);
+    const parsed = raw ? parseFloat(raw) : NaN;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 4;
+  }); // seconds annotation stays visible
 
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -35,6 +39,7 @@ export default function App() {
     clearCanvas,
     deleteSelected,
     deleteByAnnotationId,
+    updateVisibilityByTime,
     getCanvasJSON,
     loadFromJSON,
     getCanvasElement,
@@ -104,6 +109,11 @@ export default function App() {
     if (existing) setSession(existing);
   }, []);
 
+  // Persist default duration
+  useEffect(() => {
+    localStorage.setItem(DEFAULT_DURATION_KEY, String(annotationDuration));
+  }, [annotationDuration]);
+
   // When loading a new video file, clear canvas and current session view
   useEffect(() => {
     if (!video.videoSrc) return;
@@ -129,18 +139,8 @@ export default function App() {
   // Show/hide annotations based on current time
   useEffect(() => {
     if (!session || !video.isLoaded) return;
-    const visible = getAnnotationsAtTime(session.annotations, video.currentTime);
-    // Load the most recently added visible annotation's canvas state
-    if (visible.length > 0) {
-      const last = visible[visible.length - 1];
-      try {
-        const parsed = JSON.parse(last.fabricData);
-        if (parsed.objects) {
-          // Multi-object canvas state
-        }
-      } catch {}
-    }
-  }, [video.currentTime, session, video.isLoaded]);
+    updateVisibilityByTime(session.annotations, video.currentTime);
+  }, [video.currentTime, session, video.isLoaded, updateVisibilityByTime]);
 
   const handleAnnotationAdded = useCallback((fabricJson: string, annotationId: string) => {
     if (!session) return;
@@ -171,6 +171,15 @@ export default function App() {
     const ann = session.annotations.find(a => a.id === id);
     if (!ann) return;
     const updated = updateAnnotationInSession(session, { ...ann, label });
+    setSession(updated);
+    saveSession(updated);
+  }, [session]);
+
+  const handleUpdateDuration = useCallback((id: string, duration: number) => {
+    if (!session) return;
+    const ann = session.annotations.find(a => a.id === id);
+    if (!ann) return;
+    const updated = updateAnnotationInSession(session, { ...ann, duration });
     setSession(updated);
     saveSession(updated);
   }, [session]);
@@ -275,9 +284,12 @@ export default function App() {
           <AnnotationPanel
             annotations={session?.annotations || []}
             currentTime={video.currentTime}
+            defaultDuration={annotationDuration}
             onJumpTo={handleJumpTo}
             onDelete={handleDeleteAnnotation}
             onUpdateLabel={handleUpdateLabel}
+            onUpdateDuration={handleUpdateDuration}
+            onDefaultDurationChange={setAnnotationDuration}
             onAddCurrentAsKeyFrame={handleAddKeyFrame}
           />
           <ExportPanel
