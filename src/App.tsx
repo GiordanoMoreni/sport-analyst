@@ -54,6 +54,11 @@ export default function App() {
     confidence: 0,
   });
   const [aiFencers, setAiFencers] = useState<{ id: number; x: number; y: number }[]>([]);
+  const [aiMetrics, setAiMetrics] = useState<{
+    reactionTimes: { attacker: number; defender: number; ms: number; ts: number }[];
+    stance: { id: number; forward: 'L' | 'R' | null; speed: number }[];
+    aggressiveness: { id: number; score: number }[];
+  }>({ reactionTimes: [], stance: [], aggressiveness: [] });
 
   const { ready: aiReady, error: aiError } = useMediapipeTracking({
     enabled: aiEnabled,
@@ -72,6 +77,9 @@ export default function App() {
     },
     onFencerPositions: (positions) => {
       setAiFencers(positions);
+    },
+    onMetrics: (metrics) => {
+      setAiMetrics(metrics);
     },
   });
 
@@ -350,6 +358,7 @@ export default function App() {
             currentTime={video.currentTime}
             onJumpTo={handleJumpTo}
             onClear={() => setAiEvents([])}
+            metrics={aiMetrics}
           />
           <ExportPanel
             session={session}

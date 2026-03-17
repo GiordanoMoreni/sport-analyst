@@ -40,6 +40,11 @@ interface UseMediapipeTrackingOptions {
     since: number | null;
   }) => void;
   onFencerPositions?: (positions: { id: number; x: number; y: number }[]) => void;
+  onMetrics?: (metrics: {
+    reactionTimes: { attacker: number; defender: number; ms: number; ts: number }[];
+    stance: { id: number; forward: 'L' | 'R' | null; speed: number }[];
+    aggressiveness: { id: number; score: number }[];
+  }) => void;
 }
 
 const WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm';
@@ -56,6 +61,7 @@ export function useMediapipeTracking({
   onEvent,
   onPriorityChange,
   onFencerPositions,
+  onMetrics,
 }: UseMediapipeTrackingOptions) {
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -88,6 +94,12 @@ export function useMediapipeTracking({
   const lastPriorityEmitRef = useRef(0);
   const lastPriorityActiveRef = useRef(0);
   const lastCentersRef = useRef<Record<number, { x: number; y: number }>>({});
+  const fencerSmoothRef = useRef<Record<number, { x: number; y: number }>>({});
+  const lastAttackStartRef = useRef<Record<number, { ts: number; opponent: number }>>({});
+  const reactionQueueRef = useRef<{ attacker: number; defender: number; ts: number }[]>([]);
+  const reactionTimesRef = useRef<{ attacker: number; defender: number; ms: number; ts: number }[]>([]);
+  const stanceRef = useRef<Record<number, { forward: 'L' | 'R' | null; speed: number }>>({});
+  const aggressivenessRef = useRef<Record<number, { count: number; last: number; score: number }>>({});
 
   const nextEventId = () => {
     eventSeqRef.current += 1;
@@ -252,6 +264,25 @@ export function useMediapipeTracking({
             }
           }
 
+          // Tip tracking overlay (approximate weapon tip)
+          if (centers.length >= 2) {
+            const colors = ['#3d7fff', '#ef4444'];
+            res.landmarks.forEach((lm, rawIdx) => {
+              const id = stableMap[rawIdx];
+              if (id === undefined) return;
+              const w = lm[R_WRIST] || lm[L_WRIST];
+              const e = lm[R_ELBOW] || lm[L_ELBOW];
+              if (!w || !e) return;
+              const dirx = w.x - e.x;
+              const diry = w.y - e.y;
+              const tip = { x: w.x + dirx * TIP_EXTEND, y: w.y + diry * TIP_EXTEND };
+              ctx.beginPath();
+              ctx.fillStyle = colors[id] || '#3d7fff';
+              ctx.arc(tip.x * canvas.width, tip.y * canvas.height, 3, 0, Math.PI * 2);
+              ctx.fill();
+            });
+          }
+
           const bestHit = best as BestHit | null;
           if (flags.touch && bestHit && bestHit.dist <= THRESHOLD && bestSpeedToward >= TOUCH_SPEED) {
             lastTouchRef.current = {
@@ -347,6 +378,20 @@ export function useMediapipeTracking({
                       confidence: ema,
                       meta: { attacker: stableAttacker, defender: stableDefender, phase: 'start' },
                     });
+                    lastAttackStartRef.current[stableAttacker] = {
+                      ts: video.currentTime,
+                      opponent: stableDefender,
+                    };
+                    reactionQueueRef.current.push({
+                      attacker: stableAttacker,
+                      defender: stableDefender,
+                      ts: video.currentTime,
+                    });
+                    const aggr = aggressivenessRef.current[stableAttacker] || { count: 0, last: 0, score: 0 };
+                    aggr.count += 1;
+                    aggr.last = performance.now();
+                    aggr.score = Math.min(1, aggr.count / 12);
+                    aggressivenessRef.current[stableAttacker] = aggr;
                   }
 
                   if (flags.priority) {
@@ -456,10 +501,52 @@ export function useMediapipeTracking({
             } else {
               visible = [];
             }
-            onFencerPositions(visible);
+            if (visible.length >= 2) {
+              const ALPHA = 0.2;
+              const MAX_JUMP = 0.25;
+              const smoothed = visible.map(v => {
+                const prev = fencerSmoothRef.current[v.id];
+                if (!prev) {
+                  fencerSmoothRef.current[v.id] = { x: v.x, y: v.y };
+                  return v;
+                }
+                const dxp = (v.x - prev.x) / canvas.width;
+                const dyp = (v.y - prev.y) / canvas.height;
+                const jump = Math.hypot(dxp, dyp);
+                if (jump > MAX_JUMP) {
+                  fencerSmoothRef.current[v.id] = { x: v.x, y: v.y };
+                  return v;
+                }
+                const nx = prev.x + (v.x - prev.x) * ALPHA;
+                const ny = prev.y + (v.y - prev.y) * ALPHA;
+                fencerSmoothRef.current[v.id] = { x: nx, y: ny };
+                return { ...v, x: nx, y: ny };
+              });
+              onFencerPositions(smoothed);
+            } else {
+              onFencerPositions([]);
+            }
           }
+
+          // Stance + forward foot (approx): compare ankles x positions
+          const L_ANKLE = 27;
+          const R_ANKLE = 28;
+          centers.forEach(c => {
+            const id = stableMap[c.raw];
+            if (id === undefined) return;
+            const lm = res.landmarks[c.raw];
+            const lA = lm[L_ANKLE];
+            const rA = lm[R_ANKLE];
+            if (!lA || !rA) return;
+            const forward: 'L' | 'R' = lA.x < rA.x ? 'L' : 'R';
+            const prevC = lastCentersRef.current[id];
+            const speed = prevC ? Math.hypot(c.x - prevC.x, c.y - prevC.y) * 30 : 0;
+            stanceRef.current[id] = { forward, speed };
+            lastCentersRef.current[id] = { x: c.x, y: c.y };
+          });
         } else {
           if (onFencerPositions) onFencerPositions([]);
+          fencerSmoothRef.current = {};
         }
       }
       if (modes.hands && handsRef.current) {
@@ -520,6 +607,40 @@ export function useMediapipeTracking({
         priorityRef.current = { holder: null, confidence: 0, since: null };
         onPriorityChange?.(priorityRef.current);
       }
+
+      // Reaction times: defender attack after attacker
+      if (reactionQueueRef.current.length) {
+        const latest = reactionQueueRef.current[0];
+        const defenderStart = lastAttackStartRef.current[latest.defender];
+        if (defenderStart && (video.currentTime - latest.ts) < 2) {
+          const ms = (defenderStart.ts - latest.ts) * 1000;
+          if (ms > 80 && ms < 2000) {
+            reactionTimesRef.current.push({
+              attacker: latest.attacker,
+              defender: latest.defender,
+              ms,
+              ts: video.currentTime,
+            });
+            reactionQueueRef.current.shift();
+          }
+        } else if ((video.currentTime - latest.ts) >= 2) {
+          reactionQueueRef.current.shift();
+        }
+      }
+
+      if (onMetrics) {
+        const reactionTimes = reactionTimesRef.current.slice(-10);
+        const stance = Object.entries(stanceRef.current).map(([id, s]) => ({
+          id: Number(id),
+          forward: s.forward,
+          speed: s.speed,
+        }));
+        const aggressiveness = Object.entries(aggressivenessRef.current).map(([id, a]) => ({
+          id: Number(id),
+          score: a.score,
+        }));
+        onMetrics({ reactionTimes, stance, aggressiveness });
+      }
     };
 
     rafRef.current = requestAnimationFrame(tick);
@@ -528,7 +649,7 @@ export function useMediapipeTracking({
       rafRef.current = null;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     };
-  }, [enabled, ready, modes, flags, videoRef, canvasRef, onEvent, onPriorityChange, onFencerPositions]);
+  }, [enabled, ready, modes, flags, videoRef, canvasRef, onEvent, onPriorityChange, onFencerPositions, onMetrics]);
 
   return { ready, error };
 }

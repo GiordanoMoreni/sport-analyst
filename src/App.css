@@ -215,6 +215,24 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   color: var(--text-muted);
   font-family: 'JetBrains Mono', monospace;
 }
+.ai-metrics {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 16px 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+}
+.ai-metric {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ai-metric strong {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-primary);
+}
 .ann-duration {
   display: inline-flex;
   align-items: center;

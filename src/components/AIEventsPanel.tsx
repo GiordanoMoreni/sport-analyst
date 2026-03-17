@@ -10,6 +10,11 @@ interface AIEventsPanelProps {
   currentTime: number;
   onJumpTo: (time: number) => void;
   onClear: () => void;
+  metrics?: {
+    reactionTimes: { attacker: number; defender: number; ms: number; ts: number }[];
+    stance: { id: number; forward: 'L' | 'R' | null; speed: number }[];
+    aggressiveness: { id: number; score: number }[];
+  };
 }
 
 const EVENT_LABELS: Record<AIEvent['type'], string> = {
@@ -22,6 +27,7 @@ export const AIEventsPanel: React.FC<AIEventsPanelProps> = ({
   currentTime,
   onJumpTo,
   onClear,
+  metrics,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
   const sorted = [...events].sort((a, b) => a.timestamp - b.timestamp);
@@ -46,6 +52,30 @@ export const AIEventsPanel: React.FC<AIEventsPanelProps> = ({
 
       {!collapsed && (
         <div className="annotation-list">
+          {metrics && (
+            <div className="ai-metrics">
+              <div className="ai-metric">
+                <span>Reazione (ult.):</span>
+                <strong>
+                  {metrics.reactionTimes.length
+                    ? `${Math.round(metrics.reactionTimes[metrics.reactionTimes.length - 1].ms)} ms`
+                    : '—'}
+                </strong>
+              </div>
+              <div className="ai-metric">
+                <span>Stance:</span>
+                <strong>
+                  {metrics.stance.map(s => `F${s.id + 1}:${s.forward || '—'}`).join(' | ') || '—'}
+                </strong>
+              </div>
+              <div className="ai-metric">
+                <span>Aggressivita:</span>
+                <strong>
+                  {metrics.aggressiveness.map(a => `F${a.id + 1}:${Math.round(a.score * 100)}%`).join(' | ') || '—'}
+                </strong>
+              </div>
+            </div>
+          )}
           {sorted.length === 0 && (
             <div className="empty-state">
               Nessun evento AI. Attiva l’AI Tracking e riproduci il video.
