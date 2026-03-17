@@ -438,6 +438,16 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 }
 .ai-modes.disabled { opacity: 0.5; }
 .ai-status { margin-left: auto; font-size: 11px; color: var(--text-muted); }
+.ai-priority {
+  margin-left: 10px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+}
+.ai-priority.none { opacity: 0.6; }
 
 .ai-canvas {
   position: absolute;

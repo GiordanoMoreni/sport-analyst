@@ -27,6 +27,11 @@ interface UseMediapipeTrackingOptions {
     confidence: number;
     meta?: Record<string, unknown>;
   }) => void;
+  onPriorityChange?: (state: {
+    holder: number | null;
+    confidence: number;
+    since: number | null;
+  }) => void;
 }
 
 const WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm';
@@ -40,6 +45,7 @@ export function useMediapipeTracking({
   videoRef,
   canvasRef,
   onEvent,
+  onPriorityChange,
 }: UseMediapipeTrackingOptions) {
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -60,6 +66,13 @@ export function useMediapipeTracking({
   } | null>(null);
   const lastAttackEmitRef = useRef<Record<number, number>>({});
   const attackEmaRef = useRef<Record<number, number>>({});
+  const touchEmaRef = useRef<Record<number, number>>({});
+  const priorityRef = useRef<{ holder: number | null; confidence: number; since: number | null }>({
+    holder: null,
+    confidence: 0,
+    since: null,
+  });
+  const lastAnyAttackRef = useRef(0);
 
   const nextEventId = () => {
     eventSeqRef.current += 1;
@@ -152,6 +165,7 @@ export function useMediapipeTracking({
           const THRESHOLD = 0.08;
           const ATTACK_SPEED = 0.65;
           const ATTACK_COOLDOWN = 900;
+          const TOUCH_SPEED = 0.12;
           const TIP_EXTEND = 0.22;
           type BestHit = { dist: number; x: number; y: number; attacker: number; defender: number };
           let best: BestHit | null = null;
@@ -164,12 +178,14 @@ export function useMediapipeTracking({
             return { x, y };
           };
 
+          let bestSpeedToward = 0;
           for (let i = 0; i < res.landmarks.length; i += 1) {
             for (let j = 0; j < res.landmarks.length; j += 1) {
               if (i === j) continue;
               const attacker = res.landmarks[i];
               const defenderCenter = torsoCenter(res.landmarks[j]);
               if (!defenderCenter) continue;
+              const prev = lastPoseRef.current;
               const wrists = [
                 { w: attacker[L_WRIST], e: attacker[L_ELBOW] },
                 { w: attacker[R_WRIST], e: attacker[R_ELBOW] },
@@ -181,6 +197,19 @@ export function useMediapipeTracking({
                 const dx = tip.x - defenderCenter.x;
                 const dy = tip.y - defenderCenter.y;
                 const dist = Math.hypot(dx, dy);
+                if (prev && prev.wrists[i]) {
+                  const pw = prev.wrists[i][0];
+                  if (pw) {
+                    const dt = Math.max(0.001, (now - prev.ts) / 1000);
+                    const vx = (p.w.x - pw.x) / dt;
+                    const vy = (p.w.y - pw.y) / dt;
+                    const dxv = defenderCenter.x - p.w.x;
+                    const dyv = defenderCenter.y - p.w.y;
+                    const inv = 1 / (Math.hypot(dxv, dyv) + 1e-6);
+                    const speedToward = vx * (dxv * inv) + vy * (dyv * inv);
+                    if (speedToward > bestSpeedToward) bestSpeedToward = speedToward;
+                  }
+                }
                 if (!best || dist < best.dist) {
                   best = { dist, x: tip.x, y: tip.y, attacker: i, defender: j };
                 }
@@ -189,7 +218,7 @@ export function useMediapipeTracking({
           }
 
           const bestHit = best as BestHit | null;
-          if (bestHit && bestHit.dist <= THRESHOLD) {
+          if (bestHit && bestHit.dist <= THRESHOLD && bestSpeedToward >= TOUCH_SPEED) {
             lastTouchRef.current = {
               ts: now,
               x: bestHit.x * canvas.width,
@@ -197,12 +226,15 @@ export function useMediapipeTracking({
             };
             if (now - lastEventEmitRef.current > 800) {
               lastEventEmitRef.current = now;
-              const confidence = Math.max(0, Math.min(1, 1 - bestHit.dist / THRESHOLD));
+              const raw = Math.max(0, Math.min(1, 1 - bestHit.dist / THRESHOLD));
+              const prevEma = touchEmaRef.current[bestHit.attacker] || 0;
+              const ema = prevEma * 0.6 + raw * 0.4;
+              touchEmaRef.current[bestHit.attacker] = ema;
               onEvent?.({
                 id: nextEventId(),
                 type: 'probable_touch',
                 timestamp: video.currentTime,
-                confidence,
+                confidence: ema,
                 meta: { attacker: bestHit.attacker, defender: bestHit.defender },
               });
             }
@@ -251,6 +283,7 @@ export function useMediapipeTracking({
                 const bestPointHit = bestPoint as Point2D | null;
                 if (bestPointHit && bestSpeedToward > ATTACK_SPEED && now - lastEmit > ATTACK_COOLDOWN) {
                   lastAttackEmitRef.current[i] = now;
+                  lastAnyAttackRef.current = now;
                   lastAttackRef.current = {
                     ts: now,
                     x1: bestPointHit.x * canvas.width,
@@ -269,6 +302,17 @@ export function useMediapipeTracking({
                     confidence: ema,
                     meta: { attacker: i, defender: j },
                   });
+
+                  const pr = priorityRef.current;
+                  const shouldSwitch =
+                    pr.holder === null ||
+                    pr.holder === i ||
+                    ema > pr.confidence + 0.1 ||
+                    (pr.since !== null && now - pr.since > 1200);
+                  if (shouldSwitch) {
+                    priorityRef.current = { holder: i, confidence: ema, since: now };
+                    onPriorityChange?.(priorityRef.current);
+                  }
                 }
               }
             }
@@ -328,6 +372,11 @@ export function useMediapipeTracking({
         ctx.lineTo(lastAttackRef.current.x2, lastAttackRef.current.y2);
         ctx.stroke();
       }
+
+      if (priorityRef.current.holder !== null && now - lastAnyAttackRef.current > 2000) {
+        priorityRef.current = { holder: null, confidence: 0, since: null };
+        onPriorityChange?.(priorityRef.current);
+      }
     };
 
     rafRef.current = requestAnimationFrame(tick);
@@ -336,7 +385,7 @@ export function useMediapipeTracking({
       rafRef.current = null;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     };
-  }, [enabled, ready, modes, videoRef, canvasRef, onEvent]);
+  }, [enabled, ready, modes, videoRef, canvasRef, onEvent, onPriorityChange]);
 
   return { ready, error };
 }

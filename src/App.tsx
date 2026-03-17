@@ -44,6 +44,10 @@ export default function App() {
     face: true,
   });
   const [aiEvents, setAiEvents] = useState<AIEvent[]>([]);
+  const [aiPriority, setAiPriority] = useState<{ holder: number | null; confidence: number }>({
+    holder: null,
+    confidence: 0,
+  });
 
   const { ready: aiReady, error: aiError } = useMediapipeTracking({
     enabled: aiEnabled,
@@ -55,6 +59,9 @@ export default function App() {
         const next = [...prev, event];
         return next.length > 300 ? next.slice(next.length - 300) : next;
       });
+    },
+    onPriorityChange: (state) => {
+      setAiPriority({ holder: state.holder, confidence: state.confidence });
     },
   });
 
@@ -384,6 +391,9 @@ export default function App() {
             <div className="ai-status">
               {aiEnabled && !aiReady && !aiError && 'Caricamento modelli...'}
               {aiEnabled && aiError && 'Errore AI'}
+            </div>
+            <div className={`ai-priority ${aiPriority.holder === null ? 'none' : ''}`}>
+              Priorita: {aiPriority.holder === null ? '—' : `F${aiPriority.holder + 1}`}
             </div>
           </div>
 
